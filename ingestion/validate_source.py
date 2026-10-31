@@ -61,7 +61,7 @@ def validate_file_structure(file_path: Path, mandatory_columns: List[str]) -> Tu
 
     # [Check 3] Read header and count rows
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
             reader = csv.reader(f)
             header = next(reader, None)
 
