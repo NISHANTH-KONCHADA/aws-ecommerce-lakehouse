@@ -61,6 +61,138 @@ An end-to-end, production-grade batch data engineering platform built on the **B
 
 ---
 
+## AWS Console Implementation & Verification Proof
+
+The following sections document the live execution and deployment across AWS services (`eu-north-1` Stockholm region).
+
+---
+
+### Step 1: Amazon S3 Data Lake Infrastructure
+- **Bucket:** `s3://ecom-lakehouse-nishanth-7/`
+- **Configuration:** Created a dedicated S3 bucket with default SSE-S3 encryption and public access blocked.
+- **Folder Hierarchy:** Organized into Medallion storage zones (`bronze/`, `silver/`, `gold/`, and `athena-results/`).
+
+![S3 Bucket Structure](screenshots/01_s3_bucket_structure.png)
+
+---
+
+### Step 2: AWS IAM Least-Privilege Security Role
+- **Role Name:** `AWSGlueServiceRole-Ecommerce`
+- **Permissions:** Configured trust relationship with `glue.amazonaws.com`.
+- **Attached Policies:**
+  - `AWSGlueServiceRole` (AWS managed policy for Glue worker communication).
+  - Inline policy granting least-privilege read/write access strictly to `ecom-lakehouse-nishanth-7/*`, Glue Data Catalog actions, and CloudWatch logs.
+
+| IAM Role Overview | Managed Policy | Inline Policy Detail |
+| :---: | :---: | :---: |
+| ![IAM Role](screenshots/02_AWSGlueServiceRole-Ecommerce.png) | ![Managed Policy](screenshots/02-1_AWSGlueServiceRole_policy.png) | ![Inline Policy](screenshots/02-2_iam_glue_service_role.png) |
+
+---
+
+### Step 3: Serverless AWS Glue 4.0 PySpark ETL Job
+- **Job Name:** `ecommerce_batch_etl`
+- **Compute:** Glue 4.0 (Apache Spark 3.3, Python 3, 10 DPUs with worker type `G.1X`).
+- **Processing:** Processed 550,000+ records across 8 datasets:
+  - Cleaned and parsed ISO UTC timestamps.
+  - Quarantined 814 duplicate review records and 2 negative/invalid payment records.
+  - Converted data into Snappy-compressed columnar Parquet.
+  - Built the Kimball Star Schema facts and pre-aggregated analytics marts in Gold.
+- **Status:** **Succeeded** (Execution completed without error).
+
+![Glue ETL Job Succeeded](screenshots/03_glue_etl_job_succeeded.png)
+
+---
+
+### Step 4: AWS Glue Crawler & Automated Metadata Discovery
+- **Crawler Name:** `ecommerce_gold_crawler`
+- **Target Path:** `s3://ecom-lakehouse-nishanth-7/gold/`
+- **Database:** `ecommerce_lakehouse_db`
+- **Outcome:** The crawler traversed all Gold directories, inferred the Parquet schemas, and automatically registered all dimensional tables and marts in the Glue Data Catalog.
+
+![Glue Crawler Completed](screenshots/04_glue_crawler_completed.png)
+
+---
+
+### Step 5: AWS Glue Data Catalog (Metastore & Schema Definitions)
+- **Database:** `ecommerce_lakehouse_db`
+- **Cataloged Tables (8):**
+  - Dimensions: `dim_customers`, `dim_products`, `dim_sellers`
+  - Facts: `fact_order_items`, `fact_payments`
+  - Marts: `gold_daily_sales`, `gold_delivery_kpis`, `gold_product_performance`
+- **Format:** All tables classified as **Parquet**.
+
+| All 8 Catalog Tables Registered | Table Schema (`gold_daily_sales`) |
+| :---: | :---: |
+| ![Glue Catalog Tables](screenshots/05_glue_catalog_tables.png) | ![Table Schema Definition](screenshots/06_table_schema_definition.png) |
+
+---
+
+### Step 6: Interactive Amazon Athena SQL Analytics
+
+Amazon Athena runs serverless Presto SQL queries directly on top of the S3 Parquet tables using the Glue Data Catalog metastore.
+
+#### 6.1 Top 10 Product Categories by Revenue
+Identifies the highest revenue-generating product categories, units sold, and average price.
+- **SQL Query:**
+  ```sql
+  SELECT 
+      product_category_name_english,
+      units_sold,
+      total_revenue,
+      avg_unit_price
+  FROM ecommerce_lakehouse_db.gold_product_performance
+  ORDER BY total_revenue DESC
+  LIMIT 10;
+  ```
+- **Finding:** `health_beauty` is the top-grossing category with 9,670 units sold, followed by `watches_gifts` and `bed_bath_table`.
+
+| Query Execution | Result Set |
+| :---: | :---: |
+| ![Top Categories Query](screenshots/07_athena_top_categories_query.png) | ![Top Categories Result](screenshots/07_athena_top_categories_result.png) |
+
+---
+
+#### 6.2 Delivery SLA & Late Delivery Rates by State
+Measures delivery latency in days and SLA breach percentage across Brazilian states.
+- **SQL Query:**
+  ```sql
+  SELECT 
+      customer_state,
+      SUM(total_delivered_orders) AS total_orders,
+      SUM(late_orders_count) AS late_orders,
+      ROUND(SUM(late_orders_count) * 100.0 / SUM(total_delivered_orders), 2) AS late_rate_pct,
+      ROUND(AVG(avg_delivery_duration_days), 1) AS avg_delivery_days
+  FROM ecommerce_lakehouse_db.gold_delivery_kpis
+  GROUP BY customer_state
+  ORDER BY late_rate_pct DESC;
+  ```
+
+| Query Execution | Result (High Latency States) | Result (SLA Performance) |
+| :---: | :---: | :---: |
+| ![Delivery SLA Query](screenshots/08_athena_delivery_sla_query.png) | ![Delivery SLA Result 1](screenshots/08_athena_delivery_sla_result_1.png) | ![Delivery SLA Result 2](screenshots/08_athena_delivery_sla_result_2.png) |
+
+---
+
+#### 6.3 Payment Method Popularity & Monetary Volume
+Analyzes customer payment preferences and overall monetary distribution across transaction types.
+- **SQL Query:**
+  ```sql
+  SELECT 
+      payment_type,
+      COUNT(DISTINCT order_id) AS total_orders,
+      ROUND(SUM(payment_value), 2) AS total_revenue
+  FROM ecommerce_lakehouse_db.fact_payments
+  GROUP BY payment_type
+  ORDER BY total_revenue DESC;
+  ```
+- **Finding:** Credit cards dominate transaction volume with over 75% of total gross revenue processed, followed by boleto and vouchers.
+
+| Query Execution | Result Set |
+| :---: | :---: |
+| ![Payment Methods Query](screenshots/09_athena_payment_methods_query.png) | ![Payment Methods Result](screenshots/09_athena_payment_methods_result.png) |
+
+---
+
 ## Repository Structure
 
 ```text
@@ -77,6 +209,7 @@ An end-to-end, production-grade batch data engineering platform built on the **B
 ├── data_quality/            # Reusable validation rules & quarantine handler
 ├── glue_jobs/               # Unified AWS Glue PySpark job scripts
 ├── infrastructure/          # IAM policies and Glue Catalog setup scripts
+├── screenshots/             # Visual proof screenshots of AWS console execution
 ├── sql/                     # Athena SQL analytical queries for business KPIs
 ├── tests/                   # Pytest test suite for transformations & quality rules
 ├── requirements.txt         # Pinned Python package dependencies
@@ -123,28 +256,6 @@ python -m modeling.build_gold_marts
 # [Step 5] Run Automated Test Suite
 pytest -v tests/
 ```
-
-### 3. Deploy to AWS (Cloud Mode)
-1. Set `STORAGE_MODE=s3` and fill in `S3_BUCKET_NAME` in `.env`.
-2. Provision Glue Catalog database and crawlers:
-   ```bash
-   python -m infrastructure.glue.setup_catalog --bucket your-bucket-name --role-arn arn:aws:iam::123456789012:role/AWSGlueServiceRole
-   ```
-3. Deploy `glue_jobs/ecommerce_etl.py` to AWS Glue and schedule via AWS Step Functions or EventBridge.
-4. Execute analytical queries in `sql/` directly via Amazon Athena.
-
----
-
-## Core Business Questions Answered
-
-| Business Question | Athena SQL Query | Key Finding / KPI |
-| :--- | :--- | :--- |
-| **Revenue Trend & MoM Growth** | `sql/01_monthly_orders_and_revenue.sql` | Monthly order volume, item revenue, freight, gross revenue, and AOV. |
-| **Top Categories & Products** | `sql/02_top_products_and_categories.sql` | Revenue shares, volume ranking via dense ranking. |
-| **Geographic Distribution** | `sql/03_orders_by_customer_state.sql` | Order concentration by Brazilian states (SP, RJ, MG). |
-| **Payment Method Preference** | `sql/04_payment_methods_distribution.sql` | Credit card vs. boleto volume, installment dynamics. |
-| **Delivery SLAs & Late Rates** | `sql/05_delivery_performance_and_late_rates.sql` | Late delivery rate percentage and average transit latency. |
-| **Customer Retention** | `sql/06_repeat_customers_analysis.sql` | Repeat purchase cohorts via `customer_unique_id`. |
 
 ---
 
