@@ -45,6 +45,7 @@ aws_credentials
 # Large & Raw Data Files (Commit only sample/synthetic data in data/sample/)
 data/raw/
 data/downloaded/
+dataset/
 data/bronze/
 data/silver/
 data/gold/
