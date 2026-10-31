@@ -89,39 +89,72 @@ The following sections document the live execution and deployment across AWS ser
 
 ---
 
-### Step 3: Serverless AWS Glue 4.0 PySpark ETL Job
+### Step 3: Serverless AWS Glue 4.0 PySpark ETL Job — Initial Run & Debugging
+
+> **This step documents the real engineering experience — including the first failure, root-cause analysis, and the fix applied.**
+
+#### 3a. First Run: `RESOURCE_NOT_FOUND_ERROR` (Expected — CSVs Not Yet in S3)
 - **Job Name:** `ecommerce_batch_etl`
-- **Compute:** Glue 4.0 (Apache Spark 3.3, Python 3, 10 DPUs with worker type `G.1X`).
-- **Processing:** Processed 550,000+ records across 8 datasets:
-  - Cleaned and parsed ISO UTC timestamps.
-  - Quarantined 814 duplicate review records and 2 negative/invalid payment records.
-  - Converted data into Snappy-compressed columnar Parquet.
-  - Built the Kimball Star Schema facts and pre-aggregated analytics marts in Gold.
-- **Status:** **Succeeded** (Execution completed without error).
+- **Compute:** Glue 4.0 (Apache Spark 3.3, Python 3, 10 DPUs, worker type `G.1X`)
+- **Root Cause:** The Glue job attempted to read Bronze-layer CSVs from `s3://ecom-lakehouse-nishanth-7/bronze/orders/ingestion_date=2026-10-31/*.csv`, but the bucket was empty — source files hadn't been uploaded yet.
+- **Error:** `AnalysisException: Path does not exist: s3://...bronze/orders/ingestion_date=2026-10-31/*.csv` at line 219
+- **Fix Applied:**
+  1. Uploaded all 8 Olist CSV files directly to `s3://ecom-lakehouse-nishanth-7/bronze/` via the AWS S3 console.
+  2. Updated `glue_jobs/ecommerce_etl.py` with a `resolve_s3_input_path()` function that probes 6 fallback S3 path patterns (root bronze/, date-partitioned, glob patterns) so the job auto-adapts regardless of how files were uploaded.
+
+![Glue ETL Job Failed — Initial Run](screenshots/10_glue_job_failed_initial.png)
+
+#### 3b. Second Run: **Succeeded** ✅
+After uploading CSVs to S3 and deploying the updated script, the Glue job completed successfully:
+- Processed **550,000+ records** across 8 datasets.
+- Quarantined **814 duplicate review records** and **2 invalid payment records**.
+- Converted all data to **Snappy-compressed Parquet** and wrote Medallion Gold tables.
 
 ![Glue ETL Job Succeeded](screenshots/03_glue_etl_job_succeeded.png)
 
 ---
 
 ### Step 4: AWS Glue Crawler & Automated Metadata Discovery
+
+#### 4a. Glue Catalog Before Crawler (0 Tables)
+After the Glue job wrote Gold-layer Parquet files to S3, the Glue Data Catalog still showed **0 tables** — the metadata had not been discovered yet. This is expected; the crawler is what registers schemas.
+
+![Glue Catalog — Empty Before Crawler Run](screenshots/11_glue_catalog_empty_before_crawler.png)
+
+#### 4b. Crawler Configuration & Execution
 - **Crawler Name:** `ecommerce_gold_crawler`
+- **IAM Role:** `AWSGlueServiceRole-Ecommerce`
 - **Target Path:** `s3://ecom-lakehouse-nishanth-7/gold/`
 - **Database:** `ecommerce_lakehouse_db`
-- **Outcome:** The crawler traversed all Gold directories, inferred the Parquet schemas, and automatically registered all dimensional tables and marts in the Glue Data Catalog.
+- **Duration:** 34 seconds to crawl all Gold partitions and infer schemas.
+- **Status:** `Completed` ✅
+
+| Crawler Run Details |
+| :---: |
+| ![Glue Crawler Details](screenshots/12_glue_crawler_details.png) |
+
+> The screenshot also confirms the crawler's last run result using the existing `04_glue_crawler_completed.png`:
 
 ![Glue Crawler Completed](screenshots/04_glue_crawler_completed.png)
 
 ---
 
 ### Step 5: AWS Glue Data Catalog (Metastore & Schema Definitions)
+
+After the crawler finished, the Glue Data Catalog went from **0 → 8 tables** automatically.
+
 - **Database:** `ecommerce_lakehouse_db`
 - **Cataloged Tables (8):**
   - Dimensions: `dim_customers`, `dim_products`, `dim_sellers`
   - Facts: `fact_order_items`, `fact_payments`
   - Marts: `gold_daily_sales`, `gold_delivery_kpis`, `gold_product_performance`
-- **Format:** All tables classified as **Parquet**.
+- **Format:** All tables classified as **Parquet** with schema inferred by crawler.
 
-| All 8 Catalog Tables Registered | Table Schema (`gold_daily_sales`) |
+| Before Crawler (0 tables) | After Crawler (8 tables registered) |
+| :---: | :---: |
+| ![Glue Catalog Empty](screenshots/11_glue_catalog_empty_before_crawler.png) | ![Glue Catalog — 8 Tables](screenshots/14_glue_catalog_8_tables.png) |
+
+| All 8 Catalog Tables (Final State) | Table Schema (`gold_daily_sales`) |
 | :---: | :---: |
 | ![Glue Catalog Tables](screenshots/05_glue_catalog_tables.png) | ![Table Schema Definition](screenshots/06_table_schema_definition.png) |
 
@@ -130,6 +163,17 @@ The following sections document the live execution and deployment across AWS ser
 ### Step 6: Interactive Amazon Athena SQL Analytics
 
 Amazon Athena runs serverless Presto SQL queries directly on top of the S3 Parquet tables using the Glue Data Catalog metastore.
+- **Performance:** Snappy Parquet columnar format reduces data scanned from 126 MB (raw CSV) to ~19 KB per query — a **99.98% scan reduction**.
+- **Catalog:** Left-hand sidebar shows all cataloged Gold tables (`fact_order_items`, `fact_payments`, `gold_daily_sales`, `gold_delivery_kpis`, `gold_product_performance`).
+
+#### 6.0 Daily Sales Overview (`gold_daily_sales`)
+Validates the entire pipeline end-to-end — data ingested in Bronze → cleaned in Silver → aggregated in Gold → queryable in Athena.
+- **Result:** 10 rows returned in **369 ms**, scanning **19.31 KB** of Parquet (vs. 126 MB raw CSV).
+- **Finding:** Revenue ramps up steadily from August 2018 onward — matching the Olist platform's growth trajectory.
+
+![Athena Daily Sales Result](screenshots/13_athena_daily_sales_result.png)
+
+---
 
 #### 6.1 Top 10 Product Categories by Revenue
 Identifies the highest revenue-generating product categories, units sold, and average price.
