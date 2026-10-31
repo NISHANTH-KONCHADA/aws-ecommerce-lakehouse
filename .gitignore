@@ -45,6 +45,11 @@ aws_credentials
 # Large & Raw Data Files (Commit only sample/synthetic data in data/sample/)
 data/raw/
 data/downloaded/
+data/bronze/
+data/silver/
+data/gold/
+data/quarantine/
+data/manifests/
 *.csv
 !data/sample/*.csv
 *.parquet
@@ -76,3 +81,4 @@ htmlcov/
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
