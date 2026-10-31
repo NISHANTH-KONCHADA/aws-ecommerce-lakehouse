@@ -145,3 +145,4 @@ This document defines the schema, data types, primary keys, relationships, and g
 3. **`gold_product_performance`**:
    - **Grain:** One row per product category (`product_category_name_english`).
    - **Metrics:** `units_sold`, `total_revenue`, `avg_item_price`, `avg_review_score`.
+

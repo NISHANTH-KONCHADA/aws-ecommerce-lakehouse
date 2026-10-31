@@ -42,3 +42,4 @@ kaggle datasets download -d olistbr/brazilian-ecommerce -p data/raw/ --unzip
 
 ## 3. Using Sample Data for Quick Local Testing
 For rapid development, CI, and code validation, the `data/sample/` folder contains synthetic sample records matching the exact schema and data types of the full dataset. You can test the entire pipeline locally without downloading the 100k+ row Kaggle dataset.
+

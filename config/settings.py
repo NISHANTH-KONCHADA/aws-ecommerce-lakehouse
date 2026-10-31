@@ -159,3 +159,4 @@ def get_config(config_path: Optional[Path] = None) -> AppConfig:
         datasets=datasets,
         data_quality=raw_yaml.get("data_quality", {})
     )
+
